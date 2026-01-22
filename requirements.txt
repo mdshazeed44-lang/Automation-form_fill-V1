@@ -1,8 +1,5 @@
-pandas
-playwright
 flask
 gspread
-google-auth
 playwright
 pandas
 requests
