@@ -88,7 +88,7 @@ class Config:
     RETRY_DELAY = 2
 
     # Browser Settings
-    HEADLESS = False
+    HEADLESS = True
     SLOW_MO = 50
 
 
