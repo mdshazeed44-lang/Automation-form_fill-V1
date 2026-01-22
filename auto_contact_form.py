@@ -32,7 +32,9 @@ class Config:
     WEBSITE_SHEET_RANGE = "'Database'!A:A"            # Sheet 1: Website URLs (header + urls)
     DETAILS_SHEET_RANGE = "'Details to fill'!A:E"    # Sheet 2: Form details (header + row)
     STATUS_COLUMN_RANGE = "'Database'!B:B"           # Status column (Column B)
-    CREDENTIALS_FILE = "form-automation-484413-7257a92cfa90.json"
+   
+    GOOGLE_CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS_JSON"
+
 
     # Scopes required for Google Sheets API (READ + WRITE)
     SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -95,27 +97,55 @@ class Config:
 # =========================
 # GOOGLE SHEETS API CLIENT
 # =========================
+# =========================
+# GOOGLE SHEETS API CLIENT
+# =========================
 
 class GoogleSheetsClient:
-    """Handle Google Sheets API with READ + WRITE capabilities"""
+    """Handle Google Sheets API with READ + WRITE capabilities.
+    Auth is loaded from an environment variable containing the full service account JSON
+    (recommended for cloud), or optionally from a local file (useful for local testing)."""
 
-    def __init__(self, credentials_file: str):
+    def __init__(self, credentials_env_var: str = Config.GOOGLE_CREDENTIALS_ENV, credentials_file: Optional[str] = None):
+        self.credentials_env_var = credentials_env_var
         self.credentials_file = credentials_file
         self.service = None
+        self.creds_dict = None
         self.authenticate()
 
     def authenticate(self):
-        """Authenticate with Google Sheets API"""
+        """Authenticate with Google Sheets API using env var (preferred) or local file (fallback)."""
         try:
             print("🔐 Authenticating with Google Sheets API...")
-            creds = Credentials.from_service_account_file(
-                self.credentials_file,
-                scopes=Config.SCOPES
-            )
+
+            creds_json = os.getenv(self.credentials_env_var)
+
+            if creds_json:
+                # Load from environment variable (preferred - secure for cloud)
+                try:
+                    self.creds_dict = json.loads(creds_json)
+                except Exception as e:
+                    raise RuntimeError("Invalid JSON in environment variable " + self.credentials_env_var + f": {e}")
+
+                creds = Credentials.from_service_account_info(self.creds_dict, scopes=Config.SCOPES)
+
+            elif self.credentials_file and os.path.exists(self.credentials_file):
+                # Fallback: load from local file (useful for local dev only)
+                with open(self.credentials_file, "r") as f:
+                    self.creds_dict = json.load(f)
+                creds = Credentials.from_service_account_info(self.creds_dict, scopes=Config.SCOPES)
+
+            else:
+                raise FileNotFoundError(
+                    "Google credentials not found. Set the environment variable "
+                    f"{self.credentials_env_var} with the service account JSON, or provide a local credentials_file."
+                )
+
             self.service = build('sheets', 'v4', credentials=creds)
             print("✅ Successfully authenticated with Google Sheets API (READ + WRITE)")
+
         except FileNotFoundError:
-            print(f"❌ Credentials file not found: {self.credentials_file}")
+            print("❌ Credentials not provided or file missing.")
             raise
         except Exception as e:
             print(f"❌ Authentication failed: {str(e)}")
@@ -124,7 +154,6 @@ class GoogleSheetsClient:
     def update_status(self, spreadsheet_id: str, row_number: int, status: str):
         """Update status in Google Sheet (Column B)"""
         try:
-            # row_number here is expected to be zero-based index of the first data row (0 => row 2 in sheet)
             sheet_row = row_number + 2  # convert to sheet 1-indexed row (row 1 = header)
             range_name = f"Database!B{sheet_row}"
             body = {'values': [[status]]}
@@ -153,7 +182,6 @@ class GoogleSheetsClient:
                 print("❌ No website URLs found in Sheet 1")
                 return pd.DataFrame()
 
-            # Assume first row is header and subsequent rows are URLs
             websites = [row[0] for row in websites_values[1:] if row and len(row) > 0]
             print(f"✅ Found {len(websites)} website URLs")
 
@@ -203,11 +231,9 @@ class GoogleSheetsClient:
             if status_code == 403:
                 print("🔒 Access denied (403). Make sure you shared the sheet with the service account email.")
                 try:
-                    with open(self.credentials_file, 'r') as f:
-                        j = json.load(f)
-                        client_email = j.get('client_email')
-                        if client_email:
-                            print("   Share with this email:", client_email)
+                    # use creds_dict (if available) to show client_email
+                    if self.creds_dict and 'client_email' in self.creds_dict:
+                        print("   Share with this email:", self.creds_dict.get('client_email'))
                 except Exception:
                     pass
             elif status_code == 400:
@@ -727,7 +753,9 @@ async def main_async():
     print()
 
     # Setup Google Sheets
-    sheets_client = GoogleSheetsClient(Config.CREDENTIALS_FILE)
+    # Setup Google Sheets (will read credentials from env var by default)
+    sheets_client = GoogleSheetsClient()
+
 
     # Load data
     df = sheets_client.read_two_sheets(
